@@ -1,0 +1,12 @@
+version=1
+id=2969455858
+title=Target Square: On Load Commands
+description=[h1] Description [/h1]
+description=Simple way to trigger functions when the square is loaded, without every mod performing same checks multiple times.
+description=
+description=Test API, meant to replace repetitive use of the LoadGridsquare Event, where not neccessary.
+description=
+description=Workshop ID: 2969455858
+description=Mod ID: TargetSquareOnLoad
+tags=Build 41;Framework;Multiplayer
+visibility=public
