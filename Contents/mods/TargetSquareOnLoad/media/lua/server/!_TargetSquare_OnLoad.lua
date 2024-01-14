@@ -5,13 +5,15 @@
 
 if isClient() then return end
 
-local System = {Type = "TargetSquareOnLoad" }
+---@class TargetSquareOnLoad
+local System = { Type = "TargetSquareOnLoad" }
+---@type table<string, fun(square: IsoGridSquare,commandData: table)>
 System.OnLoadCommands = {}
 System.wantNoise = getDebug()
 
 ---try to sync if file is reloaded
 function System.instanceCheck()
-    for i=0,SGlobalObjects.getSystemCount() - 1 do
+    for i = 0, SGlobalObjects.getSystemCount() - 1 do
         local system = SGlobalObjects.getSystemByIndex(i)
         local luaSystem = system:getModData()
         if luaSystem.Type == System.Type then
@@ -22,13 +24,16 @@ function System.instanceCheck()
 end
 System.instanceCheck()
 
+---@param message string
 function System:noise(message) if self.wantNoise then print(self.Type..': '..message) end end
 
+---Create instance
 function System.OnSGlobalObjectSystemInit()
     local jSystem = SGlobalObjects.registerSystem(System.Type)
-    jSystem:setModDataKeys({ "savedData"})
-    jSystem:setObjectModDataKeys({ "commands"})
+    jSystem:setModDataKeys({"savedData"})
+    jSystem:setObjectModDataKeys({"commands"})
 
+    ---@class TargetSquareOnLoad
     local o = jSystem:getModData()
     setmetatable(o, System)
     System.__index = System
@@ -40,6 +45,7 @@ function System.OnSGlobalObjectSystemInit()
     return o
 end
 
+---Add commands that were added before system init
 function System:addPreInitActions()
     if not System.queuedCommands then return end
     for i,v in ipairs(System.queuedCommands) do
@@ -49,12 +55,14 @@ function System:addPreInitActions()
 end
 
 --- called from java when a chunk with GlobalObjects managed by this system is loaded.
+---@param wx int
+---@param wy int
 function System:OnChunkLoaded(wx, wy)
     local ipairs, table, getSquare = ipairs, table, getSquare
     local globalObjects = self.system:getObjectsInChunk(wx, wy)
     if self.wantNoise then self:noise("loaded chunk with #objects="..globalObjects:size()) end
 
-    for i=globalObjects:size()-1, 0, -1  do
+    for i = globalObjects:size() - 1, 0, -1  do
         local globalObject = globalObjects:get(i)
         local luaObject = globalObject:getModData() --only has the persistent commands table
         local square = getSquare(globalObject:getX(), globalObject:getY(), globalObject:getZ())
@@ -77,6 +85,10 @@ function System:OnChunkLoaded(wx, wy)
     self.system:finishedWithList(globalObjects)
 end
 
+---Call a command function added for the square
+---@param square? IsoGridSquare
+---@param command table
+---@return boolean?
 function System:doCommand(square, command)
     if not square and not command.squareCanBeNil then return end
     local f = self.OnLoadCommands[command.command]
@@ -87,6 +99,8 @@ function System:doCommand(square, command)
     end
 end
 
+---Check if the command is valid
+---@param command table
 function System:isValidCommand(command)
     if type(command) ~= "table" then error(self.Type .. ": invalid command, not a table type " .. tostring(command)) return end
     if type(command.command) ~= "string" then error(self.Type .. ": invalid command, not a string type " .. tostring(command)) return end
@@ -94,6 +108,11 @@ function System:isValidCommand(command)
     return true
 end
 
+---Add the command to the global object data
+---@param x int
+---@param y int
+---@param z int
+---@param command table
 function System:addCommandToGlobalObject(x,y,z,command)
     if System:isValidCommand(command) then
         local globalObject = self.system:getObjectAt(x,y,z)
@@ -107,6 +126,7 @@ function System:addCommandToGlobalObject(x,y,z,command)
     end
 end
 
+---queue command for after system init
 function System.queueAddCommand(...)
     if not System.queuedCommands then System.queuedCommands = {} end
     table.insert(System.queuedCommands,{...})
@@ -115,12 +135,12 @@ end
 ---@param x number
 ---@param y number
 ---@param z number
----@param command table
-function System.addCommand(...)
+---@param commandData table
+function System.addCommand(x,y,z,commandData)
     if System.instance then
-        System.instance:addCommandToGlobalObject(...)
+        System.instance:addCommandToGlobalObject(x,y,z,commandData)
     else
-        System.queueAddCommand(...)
+        System.queueAddCommand(x,y,z,commandData)
     end
 end
 
