@@ -5,14 +5,22 @@
 
 if isClient() then return end
 
----@class TargetSquareOnLoad
-local System = { Type = "TargetSquareOnLoad" }
----@type table<string, fun(square: IsoGridSquare,commandData: table)>
-System.OnLoadCommands = {}
-System.wantNoise = getDebug()
+local type, getSquare = type, getSquare
 
----try to sync if file is reloaded
-function System.instanceCheck()
+---@class TargetSquareOnLoad
+local System = {
+    ---@type string
+    Type = "TargetSquareOnLoad",
+    ---@type boolean
+    wantNoise = getDebug(),
+    ---@type table<string, fun(square: IsoGridSquare,commandData: table)>
+    OnLoadCommands = {},
+    ---@type table<table> | nil
+    queuedCommands = {},
+}
+
+--[[ try to sync if file is reloaded
+do
     for i = 0, SGlobalObjects.getSystemCount() - 1 do
         local system = SGlobalObjects.getSystemByIndex(i)
         local luaSystem = system:getModData()
@@ -22,7 +30,7 @@ function System.instanceCheck()
         end
     end
 end
-System.instanceCheck()
+--]]
 
 ---@param message string
 function System:noise(message) if self.wantNoise then print(self.Type..': '..message) end end
@@ -39,64 +47,10 @@ function System.OnSGlobalObjectSystemInit()
     System.__index = System
     o.system = jSystem
     o.savedData = o.savedData or {}
-    o:addPreInitActions()
+    o:addPreInitCommands()
     o:noise('OnSGlobalObjectSystemInit, #objects='.. jSystem:getObjectCount())
     System.instance = o
     return o
-end
-
----Add commands that were added before system init
-function System:addPreInitActions()
-    if not System.queuedCommands then return end
-    for i,v in ipairs(System.queuedCommands) do
-        self:addCommandToGlobalObject(unpack(v))
-    end
-    System.queuedCommands = nil
-end
-
---- called from java when a chunk with GlobalObjects managed by this system is loaded.
----@param wx int
----@param wy int
-function System:OnChunkLoaded(wx, wy)
-    local ipairs, table, getSquare = ipairs, table, getSquare
-    local globalObjects = self.system:getObjectsInChunk(wx, wy)
-    if self.wantNoise then self:noise("loaded chunk with #objects="..globalObjects:size()) end
-
-    for i = globalObjects:size() - 1, 0, -1  do
-        local globalObject = globalObjects:get(i)
-        local luaObject = globalObject:getModData() --only has the persistent commands table
-        local square = getSquare(globalObject:getX(), globalObject:getY(), globalObject:getZ())
-
-        local repeatCommands, repeatNum = {}, 0
-        for i,command in ipairs(luaObject.commands) do
-            if self:doCommand(square,command) == true then
-                repeatNum = repeatNum + 1
-                repeatCommands[repeatNum] = command
-            end
-        end
-
-        if repeatNum > 0 then
-            luaObject.commands = repeatCommands
-        else
-            self.system:removeObject(globalObject)
-        end
-    end
-
-    self.system:finishedWithList(globalObjects)
-end
-
----Call a command function added for the square
----@param square? IsoGridSquare
----@param command table
----@return boolean?
-function System:doCommand(square, command)
-    if not square and not command.squareCanBeNil then return end
-    local f = self.OnLoadCommands[command.command]
-    if type(f) == "function" then
-        return f(square, command)
-    else
-        print(string.format("%s: command %s is %s",self.Type,type(command) == "table" and command.command or command,tostring(f)))
-    end
 end
 
 ---Check if the command is valid
@@ -126,12 +80,20 @@ function System:addCommandToGlobalObject(x,y,z,command)
     end
 end
 
+---Add commands that were added before system init
+function System:addPreInitCommands()
+    for i,v in ipairs(System.queuedCommands) do
+        self:addCommandToGlobalObject(unpack(v))
+    end
+    System.queuedCommands = nil
+end
+
 ---queue command for after system init
 function System.queueAddCommand(...)
-    if not System.queuedCommands then System.queuedCommands = {} end
     table.insert(System.queuedCommands,{...})
 end
 
+---Add a command to execute when the chunk with the target square is loaded.
 ---@param x number
 ---@param y number
 ---@param z number
@@ -144,41 +106,83 @@ function System.addCommand(x,y,z,commandData)
     end
 end
 
+--- called from java when a chunk with GlobalObjects managed by this system is loaded.
+---@param wx number
+---@param wy number
+function System:OnChunkLoaded(wx, wy)
+    local globalObjects = self.system:getObjectsInChunk(wx, wy)
+    if self.wantNoise then self:noise("loaded chunk with #objects="..globalObjects:size()) end
+
+    for i = globalObjects:size() - 1, 0, -1  do
+        local globalObject = globalObjects:get(i)
+        local luaObject = globalObject:getModData() --only has the persistent commands table
+        local square = getSquare(globalObject:getX(), globalObject:getY(), globalObject:getZ())
+
+        local repeatCommands, repeatNum = {}, 0
+        for ii = 1, #luaObject.commands do
+            local command = luaObject.commands[ii]
+            if self:doCommand(square,command) == true then
+                repeatNum = repeatNum + 1
+                repeatCommands[repeatNum] = command
+            end
+        end
+
+        if repeatNum > 0 then
+            luaObject.commands = repeatCommands
+        else
+            self.system:removeObject(globalObject)
+        end
+    end
+
+    self.system:finishedWithList(globalObjects)
+end
+
+---Call a command function added for the square
+---@param square? IsoGridSquare
+---@param command table
+---@return boolean?
+function System:doCommand(square, command)
+    if square == nil and not command.squareCanBeNil then return end
+    local f = self.OnLoadCommands[command.command]
+    if type(f) == "function" then
+        return f(square, command)
+    else
+        print(string.format("%s: command %s is %s",self.Type,command.command,tostring(f)))
+    end
+end
+
 ---called from java, return nil or a Lua table that is used to initialize the client-side system
 function System:getInitialStateForClient() return nil end
 
-Events.OnSGlobalObjectSystemInit.Add(System.OnSGlobalObjectSystemInit)
-
----fixes for global object debugger -SP only
+---fixes for global object debugger, SP only
 if not isServer() and getDebug() then
     function System:getIsoObjectAt() return nil end
 
-    local DebugGlobalObjectStateUI_ObjectList_doDrawItem = DebugGlobalObjectStateUI.ObjectList_doDrawItem
+    local original = DebugGlobalObjectStateUI.ObjectList_doDrawItem
     function DebugGlobalObjectStateUI:ObjectList_doDrawItem(y, item, alt)
-        if item.item.system:getName() == System.Type then
-            local x = 4
+        if item.item.system:getName() ~= System.Type then return original(self, y, item, alt) end
+        local x = 4
 
-            if self.selected == item.index then
-                self:drawRect(0, y, self:getWidth(), item.height-1, 0.3, 0.7, 0.35, 0.15)
-            end
-
-            local r,g,b,a = 1,1,1,1
-            local data = item.item
-            if not data.system:getObjectAt(data.x, data.y, data.z) then
-                r,g,b = 0.5,0.5,0.5
-            end
-
-            self:drawText(item.text, x, y, r, g, b, a, self.font)
-            y = y + self.fontHgt
-
-            self:drawRect(x, y, self.width - 4 * 2, 1, 1.0, 0.5, 0.5, 0.5)
-            y = y + 2
-
-            return y
-        else
-            return DebugGlobalObjectStateUI_ObjectList_doDrawItem(self, y, item, alt)
+        if self.selected == item.index then
+            self:drawRect(0, y, self:getWidth(), item.height-1, 0.3, 0.7, 0.35, 0.15)
         end
+
+        local r,g,b,a = 1,1,1,1
+        local data = item.item
+        if not data.system:getObjectAt(data.x, data.y, data.z) then
+            r,g,b = 0.5,0.5,0.5
+        end
+
+        self:drawText(item.text, x, y, r, g, b, a, self.font)
+        y = y + self.fontHgt
+
+        self:drawRect(x, y, self.width - 4 * 2, 1, 1.0, 0.5, 0.5, 0.5)
+        y = y + 2
+
+        return y
     end
 end
+
+Events.OnSGlobalObjectSystemInit.Add(System.OnSGlobalObjectSystemInit)
 
 return System
